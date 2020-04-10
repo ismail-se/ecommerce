@@ -229,7 +229,8 @@ class ConditionalOffer(AbstractConditionalOffer):
                         log_message_and_raise_validation_error(error_message)
 
     def clean_max_global_applications(self):
-        if self.max_global_applications is not None:
+        # this cleanup logic is only applicable for enterprise coupons
+        if self.priority == OFFER_PRIORITY_VOUCHER and self.max_global_applications is not None:
             if not isinstance(self.max_global_applications, six.integer_types) or self.max_global_applications < 1:
                 log_message_and_raise_validation_error(
                     'Failed to create ConditionalOffer. max_global_applications field must be a positive number.'

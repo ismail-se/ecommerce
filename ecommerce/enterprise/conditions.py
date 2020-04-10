@@ -16,14 +16,47 @@ from ecommerce.enterprise.utils import get_enterprise_id_for_user
 from ecommerce.extensions.basket.utils import ENTERPRISE_CATALOG_ATTRIBUTE_TYPE
 from ecommerce.extensions.offer.constants import OFFER_ASSIGNMENT_REVOKED, OFFER_REDEEMED
 from ecommerce.extensions.offer.mixins import ConditionWithoutRangeMixin, SingleItemConsumptionConditionMixin
+from ecommerce.extensions.offer.models import OFFER_PRIORITY_ENTERPRISE
 
 BasketAttribute = get_model('basket', 'BasketAttribute')
 BasketAttributeType = get_model('basket', 'BasketAttributeType')
 Condition = get_model('offer', 'Condition')
 ConditionalOffer = get_model('offer', 'ConditionalOffer')
 OfferAssignment = get_model('offer', 'OfferAssignment')
+StockRecord = get_model('partner', 'StockRecord')
 Voucher = get_model('voucher', 'Voucher')
 logger = logging.getLogger(__name__)
+
+
+def is_offer_max_discount_available(basket, offer):
+    # No need to do anything if `max_discount` is not set
+    if offer.max_discount is None:
+        return True
+
+    product = basket.lines.first().product
+    seat = product.course.seat_products.get(id=product.id)
+    stock_record = StockRecord.objects.get(product=seat, partner=product.course.partner)
+    course_price = stock_record.price_excl_tax
+    new_total_discount = course_price + offer.total_discount
+    if new_total_discount <= offer.max_discount:
+        return True
+
+    return False
+
+
+def is_offer_max_global_applications_available(basket, offer):
+    # no need to do anything if this is not an enterprise offer
+    if offer.priority != OFFER_PRIORITY_ENTERPRISE:
+        return True
+
+    # No need to do anything if `max_global_applications` is not set
+    if offer.max_global_applications is None:
+        return True
+
+    if offer.num_applications + 1 <= offer.max_global_applications:
+        return True
+
+    return False
 
 
 class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumptionConditionMixin, Condition):
@@ -137,6 +170,43 @@ class EnterpriseCustomerCondition(ConditionWithoutRangeMixin, SingleItemConsumpt
                            enterprise_customer,
                            enterprise_catalog,
                            courses_in_basket)
+            return False
+
+        if not is_offer_max_discount_available(basket, offer):
+            logger.warning(
+                '[Enterprise Offer Failure] Unable to apply enterprise offer because bookings limit is consumed.'
+                'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s, BookingsLimit: %s, TotalDiscount: %s',
+                username,
+                offer.id,
+                enterprise_customer,
+                enterprise_catalog,
+                courses_in_basket,
+                offer.max_discount,
+                offer.total_discount,
+            )
+            messages.warning(
+                crum.get_current_request(),
+                _('No discount available because because bookings limit set by your enterprise has already consumed'),
+            )
+            return False
+
+        if not is_offer_max_global_applications_available(basket, offer):
+            logger.warning(
+                '[Enterprise Offer Failure] Unable to apply enterprise offer because enrollments limit is consumed.'
+                'User: %s, Offer: %s, Enterprise: %s, Catalog: %s, Courses: %s, '
+                'EnrollmentsLimit: %s, TotalEnrollments: %s',
+                username,
+                offer.id,
+                enterprise_customer,
+                enterprise_catalog,
+                courses_in_basket,
+                offer.max_global_applications,
+                offer.num_applications,
+            )
+            messages.warning(
+                crum.get_current_request(),
+                _('No discount available because enrollments limit set by your enterprise has already consumed'),
+            )
             return False
 
         return True
